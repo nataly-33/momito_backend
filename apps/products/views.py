@@ -5,11 +5,11 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Q
 
-from .models import Categoria, Marca, Talla, Prenda, StockPrenda, ImagenPrendaURL
+from .models import Categoria, Marca, Talla, Prenda, StockPrenda, ImagenPrendaURL, InventoryMovement
 from .serializers import (
     CategoriaSerializer, MarcaSerializer, TallaSerializer,
     PrendaListSerializer, PrendaDetailSerializer, PrendaCreateUpdateSerializer,
-    StockPrendaSerializer, ImagenPrendaURLSerializer
+    StockPrendaSerializer, ImagenPrendaURLSerializer, InventoryMovementSerializer
 )
 from apps.core.permissions import IsAdminUser, IsEmpleadoOrAdmin
 
@@ -57,14 +57,14 @@ class TallaViewSet(viewsets.ModelViewSet):
 
 
 class PrendaViewSet(viewsets.ModelViewSet):
-    """CRUD de prendas con filtros avanzados"""
+    """CRUD de productos mayoristas con filtros B2B"""
     queryset = Prenda.objects.filter(deleted_at__isnull=True).prefetch_related(
         'marca', 'categorias', 'tallas_disponibles', 'imagenes_url', 'stocks'
     )
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['marca', 'categorias', 'color', 'destacada', 'es_novedad', 'activa']
-    search_fields = ['nombre', 'descripcion', 'color']
-    ordering_fields = ['precio', 'created_at', 'nombre']
+    filterset_fields = ['marca', 'categorias', 'activa', 'destacada']
+    search_fields = ['nombre', 'descripcion', 'code', 'marca__nombre']
+    ordering_fields = ['price_wholesale', 'precio', 'created_at', 'nombre', 'stock']
     ordering = ['-created_at']
 
     def get_serializer_class(self):
@@ -147,10 +147,21 @@ class PrendaViewSet(viewsets.ModelViewSet):
         if talla:
             queryset = queryset.filter(tallas_disponibles__id=talla)
 
-        # Filtro por disponibilidad
+        # Filtro por disponibilidad (stock en StockPrenda)
         solo_con_stock = self.request.query_params.get('con_stock')
         if solo_con_stock == 'true':
             queryset = queryset.filter(stocks__cantidad__gt=0).distinct()
+
+        # Filtro B2B: solo productos con stock bajo
+        low_stock = self.request.query_params.get('low_stock')
+        if low_stock == 'true':
+            from django.db.models import F
+            queryset = queryset.filter(stock__lte=F('stock_min'))
+
+        # Filtro por marca (nombre)
+        brand = self.request.query_params.get('brand')
+        if brand:
+            queryset = queryset.filter(marca__nombre__icontains=brand)
 
         return queryset
     
@@ -212,6 +223,27 @@ class PrendaViewSet(viewsets.ModelViewSet):
             stocks = prenda.stocks.all()
             serializer = StockPrendaSerializer(stocks, many=True)
             return Response(serializer.data)
-    
+
     def perform_destroy(self, instance):
         instance.soft_delete()
+
+
+class InventoryMovementViewSet(viewsets.ModelViewSet):
+    """CRUD de movimientos de inventario B2B"""
+    queryset = InventoryMovement.objects.filter(deleted_at__isnull=True).select_related(
+        'product', 'user'
+    )
+    serializer_class = InventoryMovementSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['product', 'movement_type']
+    search_fields = ['product__nombre', 'product__code', 'notes']
+    ordering = ['-created_at']
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [IsAuthenticated()]
+        return [IsEmpleadoOrAdmin()]
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)

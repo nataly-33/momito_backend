@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Categoria, Marca, Talla, Prenda, StockPrenda, ImagenPrendaURL
+from .models import Categoria, Marca, Talla, Prenda, StockPrenda, ImagenPrendaURL, InventoryMovement
 
 
 class CategoriaSerializer(serializers.ModelSerializer):
@@ -58,25 +58,26 @@ class StockPrendaSerializer(serializers.ModelSerializer):
 
 
 class PrendaListSerializer(serializers.ModelSerializer):
-    """Serializer ligero para listados"""
+    """Serializer ligero para listados (B2B)"""
     marca_nombre = serializers.CharField(source='marca.nombre', read_only=True)
+    category_name = serializers.ReadOnlyField()
     imagen_principal = serializers.ReadOnlyField()
     stock_total = serializers.ReadOnlyField()
     tiene_stock = serializers.ReadOnlyField()
-    tallas_disponibles_detalle = TallaSerializer(source='tallas_disponibles', many=True, read_only=True)
-    
+    is_low_stock = serializers.ReadOnlyField()
+
     class Meta:
         model = Prenda
         fields = [
-            'id', 'nombre', 'precio', 'marca_nombre', 'color', 
-            'imagen_principal', 'stock_total', 'tiene_stock',
-            'activa', 'destacada', 'es_novedad', 'slug', 'created_at',
-            'tallas_disponibles_detalle'
+            'id', 'code', 'nombre', 'precio', 'price_wholesale', 'price_retail',
+            'unit', 'min_order_qty', 'stock', 'stock_min', 'stock_total',
+            'marca_nombre', 'category_name', 'imagen_principal',
+            'tiene_stock', 'is_low_stock', 'activa', 'slug', 'created_at',
         ]
 
 
 class PrendaDetailSerializer(serializers.ModelSerializer):
-    """Serializer completo para detalles"""
+    """Serializer completo para detalles (B2B)"""
     marca_detalle = MarcaSerializer(source='marca', read_only=True)
     categorias_detalle = CategoriaSerializer(source='categorias', many=True, read_only=True)
     tallas_disponibles_detalle = TallaSerializer(source='tallas_disponibles', many=True, read_only=True)
@@ -84,29 +85,56 @@ class PrendaDetailSerializer(serializers.ModelSerializer):
     stocks = StockPrendaSerializer(many=True, read_only=True)
     stock_total = serializers.ReadOnlyField()
     tiene_stock = serializers.ReadOnlyField()
-    
+    is_low_stock = serializers.ReadOnlyField()
+    category_name = serializers.ReadOnlyField()
+
     class Meta:
         model = Prenda
         fields = [
-            'id', 'nombre', 'descripcion', 'precio', 'marca', 'marca_detalle',
-            'categorias', 'categorias_detalle', 'tallas_disponibles', 'tallas_disponibles_detalle',
+            'id', 'code', 'nombre', 'descripcion', 'precio',
+            'price_wholesale', 'price_retail', 'unit', 'min_order_qty',
+            'stock', 'stock_min', 'stock_total', 'is_low_stock',
+            'marca', 'marca_detalle', 'categorias', 'categorias_detalle',
+            'category_name', 'tallas_disponibles', 'tallas_disponibles_detalle',
             'color', 'material', 'activa', 'destacada', 'es_novedad',
-            'imagenes_url', 'stocks', 'stock_total', 'tiene_stock',
+            'imagenes_url', 'stocks', 'tiene_stock',
             'slug', 'metadata', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'slug', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'slug', 'stock_total', 'created_at', 'updated_at']
+
+
+class InventoryMovementSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.nombre', read_only=True)
+    product_code = serializers.CharField(source='product.code', read_only=True)
+    user_name = serializers.SerializerMethodField()
+    movement_type_display = serializers.CharField(source='get_movement_type_display', read_only=True)
+
+    class Meta:
+        model = InventoryMovement
+        fields = [
+            'id', 'product', 'product_name', 'product_code',
+            'user', 'user_name', 'movement_type', 'movement_type_display',
+            'quantity', 'notes', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+    def get_user_name(self, obj):
+        if obj.user:
+            return f"{obj.user.nombre} {obj.user.apellido}"
+        return None
 
 
 class PrendaCreateUpdateSerializer(serializers.ModelSerializer):
-    """Serializer para crear/actualizar prendas con stocks por talla"""
+    """Serializer para crear/actualizar productos B2B"""
     stocks = serializers.ListField(child=serializers.DictField(), required=False, write_only=True)
 
     class Meta:
         model = Prenda
         fields = [
-            'nombre', 'descripcion', 'precio', 'marca', 'categorias',
-            'tallas_disponibles', 'color', 'material', 'activa',
-            'destacada', 'es_novedad', 'metadata', 'stocks'
+            'nombre', 'descripcion', 'precio', 'price_wholesale', 'price_retail',
+            'unit', 'min_order_qty', 'stock', 'stock_min',
+            'marca', 'categorias', 'tallas_disponibles', 'color', 'material',
+            'activa', 'destacada', 'es_novedad', 'metadata', 'stocks', 'code'
         ]
 
     def to_internal_value(self, data):

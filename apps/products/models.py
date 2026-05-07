@@ -52,25 +52,34 @@ class Talla(BaseModel):
 
 
 class Prenda(BaseModel):
-    """Producto principal - Prenda de ropa"""
+    """Producto mayorista de importación (TUMOMITO S.A.)"""
     nombre = models.CharField(max_length=200, verbose_name='Nombre')
     descripcion = models.TextField(verbose_name='Descripción')
     precio = models.DecimalField(max_digits=10, decimal_places=2, verbose_name='Precio')
-    
+
+    # Campos B2B mayorista
+    code = models.CharField(max_length=50, unique=True, blank=True, null=True, verbose_name='Código SKU')
+    unit = models.CharField(max_length=30, default='unidad', verbose_name='Unidad de medida')
+    min_order_qty = models.IntegerField(default=1, verbose_name='Cantidad mínima de pedido')
+    price_wholesale = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name='Precio mayorista')
+    price_retail = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, verbose_name='Precio retail sugerido')
+    stock = models.IntegerField(default=0, verbose_name='Stock total')
+    stock_min = models.IntegerField(default=0, verbose_name='Stock mínimo (alerta)')
+
     # Relaciones
     marca = models.ForeignKey(Marca, on_delete=models.PROTECT, related_name='prendas', verbose_name='Marca')
     categorias = models.ManyToManyField(Categoria, related_name='prendas', verbose_name='Categorías')
-    tallas_disponibles = models.ManyToManyField(Talla, related_name='prendas', verbose_name='Tallas disponibles')
-    
+    tallas_disponibles = models.ManyToManyField(Talla, related_name='prendas', blank=True, verbose_name='Tallas disponibles')
+
     # Características
-    color = models.CharField(max_length=50, verbose_name='Color')
+    color = models.CharField(max_length=50, blank=True, verbose_name='Color')
     material = models.CharField(max_length=200, blank=True, verbose_name='Material')
-    
+
     # Estado y destacados
     activa = models.BooleanField(default=True, verbose_name='Activa')
     destacada = models.BooleanField(default=False, verbose_name='Destacada')
     es_novedad = models.BooleanField(default=False, verbose_name='Es novedad')
-    
+
     # SEO y metadata
     slug = models.SlugField(max_length=250, unique=True, blank=True, verbose_name='Slug')
     metadata = models.JSONField(default=dict, blank=True, verbose_name='Metadata')
@@ -114,13 +123,24 @@ class Prenda(BaseModel):
     
     @property
     def stock_total(self):
-        """Calcula el stock total sumando todos los stocks por talla"""
-        return self.stocks.aggregate(total=models.Sum('cantidad'))['total'] or 0
-    
+        """Stock total: usa el campo directo `stock` si es B2B, o suma StockPrenda si hay tallas"""
+        if self.stocks.exists():
+            return self.stocks.aggregate(total=models.Sum('cantidad'))['total'] or 0
+        return self.stock
+
     @property
     def tiene_stock(self):
-        """Verifica si tiene stock disponible"""
         return self.stock_total > 0
+
+    @property
+    def is_low_stock(self):
+        """True si el stock está en nivel de alerta"""
+        return self.stock_total <= self.stock_min
+
+    @property
+    def category_name(self):
+        first = self.categorias.first()
+        return first.nombre if first else ''
 
 
 class StockPrenda(BaseModel):
@@ -186,7 +206,46 @@ class ImagenPrendaURL(BaseModel):
         return f"Imagen URL de {self.prenda.nombre}"
     
     def save(self, *args, **kwargs):
-        # Si es principal, desmarcar las demás
         if self.es_principal:
             ImagenPrendaURL.objects.filter(prenda=self.prenda, es_principal=True).update(es_principal=False)
+        super().save(*args, **kwargs)
+
+
+class InventoryMovement(BaseModel):
+    """Movimientos de inventario (entradas, salidas, ajustes)"""
+    MOVEMENT_TYPES = [
+        ('entrada', 'Entrada'),
+        ('salida', 'Salida'),
+        ('ajuste', 'Ajuste'),
+    ]
+    product = models.ForeignKey(
+        Prenda, on_delete=models.PROTECT,
+        related_name='movements', verbose_name='Producto'
+    )
+    user = models.ForeignKey(
+        'accounts.User', on_delete=models.SET_NULL,
+        null=True, related_name='inventory_movements', verbose_name='Usuario'
+    )
+    movement_type = models.CharField(max_length=20, choices=MOVEMENT_TYPES, verbose_name='Tipo')
+    quantity = models.IntegerField(verbose_name='Cantidad')
+    notes = models.TextField(blank=True, verbose_name='Notas')
+
+    class Meta:
+        db_table = 'inventory_movement'
+        verbose_name = 'Movimiento de Inventario'
+        verbose_name_plural = 'Movimientos de Inventario'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.movement_type} - {self.product.nombre} ({self.quantity})"
+
+    def save(self, *args, **kwargs):
+        product = self.product
+        if self.movement_type == 'entrada':
+            product.stock += self.quantity
+        elif self.movement_type == 'salida':
+            product.stock -= self.quantity
+        elif self.movement_type == 'ajuste':
+            product.stock = self.quantity
+        product.save(update_fields=['stock'])
         super().save(*args, **kwargs)
