@@ -3,7 +3,7 @@ from apps.core.models import BaseModel
 from apps.core.constants import ESTADOS_PEDIDO, METODOS_PAGO, ESTADOS_PAGO
 from apps.accounts.models import User
 from apps.products.models import Prenda, Talla
-from apps.customers.models import Direccion
+from apps.customers.models import Direccion, Client
 from decimal import Decimal
 
 
@@ -28,43 +28,63 @@ class MetodoPago(BaseModel):
         return self.nombre
 
 
+PAYMENT_METHOD_CHOICES = [
+    ('stripe', 'Stripe (Tarjeta)'),
+    ('transferencia', 'Transferencia bancaria'),
+    ('credito', 'Crédito'),
+    ('efectivo', 'Efectivo'),
+]
+
+
 class Pedido(BaseModel):
-    """Pedido de compra"""
-    # Información del cliente
+    """Pedido de compra B2B"""
+    # Relaciones de cliente
     usuario = models.ForeignKey(
-        User,
-        on_delete=models.PROTECT,
-        related_name='pedidos',
-        verbose_name='Usuario'
+        User, on_delete=models.PROTECT,
+        related_name='pedidos', verbose_name='Usuario'
     )
-    
+    client = models.ForeignKey(
+        Client, on_delete=models.PROTECT,
+        related_name='orders', null=True, blank=True,
+        verbose_name='Cliente empresa'
+    )
+    seller = models.ForeignKey(
+        User, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='sales',
+        verbose_name='Vendedor asignado'
+    )
+
     # Número de pedido único
     numero_pedido = models.CharField(max_length=50, unique=True, editable=False, verbose_name='Número de pedido')
-    
-    # Dirección de envío
+
+    # Dirección de envío (opcional en B2B)
     direccion_envio = models.ForeignKey(
-        Direccion,
-        on_delete=models.PROTECT,
-        related_name='pedidos',
+        Direccion, on_delete=models.PROTECT,
+        related_name='pedidos', null=True, blank=True,
         verbose_name='Dirección de envío'
     )
-    
-    # Snapshot de la dirección (por si se elimina)
     direccion_snapshot = models.JSONField(default=dict, verbose_name='Datos de dirección')
-    
+
     # Montos
-    subtotal = models.DecimalField(max_digits=10, decimal_places=2, verbose_name='Subtotal')
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name='Subtotal')
     descuento = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name='Descuento')
     costo_envio = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name='Costo de envío')
-    total = models.DecimalField(max_digits=10, decimal_places=2, verbose_name='Total')
-    
-    # Estado
+    total = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name='Total')
+
+    # Estado B2B
     estado = models.CharField(max_length=50, choices=ESTADOS_PEDIDO, default='pendiente', verbose_name='Estado')
-    
+
+    # Método de pago
+    payment_method = models.CharField(
+        max_length=20, choices=PAYMENT_METHOD_CHOICES,
+        default='transferencia', verbose_name='Método de pago'
+    )
+
     # Notas
     notas_cliente = models.TextField(blank=True, verbose_name='Notas del cliente')
     notas_internas = models.TextField(blank=True, verbose_name='Notas internas')
-    
+    notes = models.TextField(blank=True, verbose_name='Notas adicionales')
+
     # Metadata
     metadata = models.JSONField(default=dict, blank=True, verbose_name='Metadata')
     
@@ -93,7 +113,6 @@ class Pedido(BaseModel):
             random_str = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
             self.numero_pedido = f"ORD-{timestamp}-{random_str}"
         
-        # Guardar snapshot de la dirección
         if self.direccion_envio and not self.direccion_snapshot:
             self.direccion_snapshot = {
                 'nombre_completo': self.direccion_envio.nombre_completo,
@@ -129,8 +148,7 @@ class Pedido(BaseModel):
     
     @property
     def puede_cancelar(self):
-        """Verificar si el pedido puede cancelarse"""
-        return self.estado in ['pendiente', 'pago_recibido', 'confirmado']
+        return self.estado in ['pendiente', 'confirmado', 'pago_recibido']
 
 
 class DetallePedido(BaseModel):
@@ -151,6 +169,7 @@ class DetallePedido(BaseModel):
         Talla,
         on_delete=models.PROTECT,
         related_name='detalles_pedido',
+        null=True, blank=True,
         verbose_name='Talla'
     )
     
