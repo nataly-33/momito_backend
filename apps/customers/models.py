@@ -69,6 +69,38 @@ class Direccion(BaseModel):
         return ', '.join(partes)
 
 
+class Client(BaseModel):
+    """Cliente empresa B2B (supermercado, distribuidora, tienda)"""
+    CLIENT_TYPES = [
+        ('vip', 'VIP'),
+        ('regular', 'Regular'),
+        ('nuevo', 'Nuevo'),
+    ]
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE,
+        related_name='client_profile', verbose_name='Usuario'
+    )
+    company_name = models.CharField(max_length=200, verbose_name='Razón social')
+    nit = models.CharField(max_length=20, unique=True, blank=True, null=True, verbose_name='NIT')
+    phone = models.CharField(max_length=20, blank=True, verbose_name='Teléfono')
+    address = models.TextField(blank=True, verbose_name='Dirección')
+    city = models.CharField(max_length=100, blank=True, verbose_name='Ciudad')
+    credit_limit = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name='Límite de crédito')
+    client_type = models.CharField(
+        max_length=20, default='regular',
+        choices=CLIENT_TYPES, verbose_name='Tipo de cliente'
+    )
+
+    class Meta:
+        db_table = 'client'
+        verbose_name = 'Cliente Empresa'
+        verbose_name_plural = 'Clientes Empresa'
+        ordering = ['company_name']
+
+    def __str__(self):
+        return f"{self.company_name} ({self.client_type})"
+
+
 class Favoritos(BaseModel):
     """Lista de productos favoritos del cliente"""
     usuario = models.ForeignKey(

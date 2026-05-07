@@ -4,10 +4,13 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Q
 
-from .models import Direccion, Favoritos
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import filters
+
+from .models import Direccion, Favoritos, Client
 from .serializers import (
     DireccionSerializer, CustomerProfileSerializer,
-    FavoritosSerializer
+    FavoritosSerializer, ClientSerializer
 )
 from apps.core.permissions import IsOwnerOrAdmin
 
@@ -159,5 +162,58 @@ class FavoritosViewSet(viewsets.ModelViewSet):
                 'favorito': serializer.data
             }, status=status.HTTP_201_CREATED)
     
+    def perform_destroy(self, instance):
+        instance.soft_delete()
+
+
+class ClientViewSet(viewsets.ModelViewSet):
+    """
+    CRUD de clientes empresa B2B.
+
+    - Admin/Empleado: ve todos los clientes.
+    - Usuario con rol Cliente: solo puede ver/editar su propio perfil.
+
+    Endpoint especial: GET /api/customers/clients/mi_empresa/
+      → devuelve el perfil de empresa del usuario autenticado.
+    """
+    queryset = Client.objects.filter(deleted_at__isnull=True).select_related('user')
+    serializer_class = ClientSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['client_type', 'city']
+    search_fields = ['company_name', 'nit', 'city', 'user__email']
+    ordering = ['company_name']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        # Si el usuario tiene rol Cliente, solo puede ver su propio perfil
+        if user.rol and user.rol.nombre == 'Cliente':
+            qs = qs.filter(user=user)
+        return qs
+
+    @action(detail=False, methods=['get', 'patch'], url_path='mi_empresa')
+    def mi_empresa(self, request):
+        """
+        GET  → devuelve el perfil de empresa del usuario autenticado.
+        PATCH → actualiza el perfil de empresa del usuario autenticado.
+        """
+        try:
+            client = Client.objects.get(user=request.user, deleted_at__isnull=True)
+        except Client.DoesNotExist:
+            return Response(
+                {'error': 'No tenés un perfil de empresa asociado a tu usuario.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if request.method == 'GET':
+            return Response(ClientSerializer(client).data)
+
+        # PATCH
+        serializer = ClientSerializer(client, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
     def perform_destroy(self, instance):
         instance.soft_delete()
