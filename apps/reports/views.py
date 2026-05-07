@@ -62,7 +62,7 @@ class ReportsViewSet(viewsets.ViewSet):
             file_content, filename, mime_type = ReportGeneratorService.generate_from_prompt(
                 prompt=prompt,
                 user_name=user_name,
-                organization_name="SmartSales365",
+                organization_name="TUMOMITO S.A.",
                 format_override=format_override  # Prioridad al formato del select
             )
 
@@ -116,7 +116,7 @@ class ReportsViewSet(viewsets.ViewSet):
                 format_type=format_type,
                 filters=filters,
                 user_name=user_name,
-                organization_name="SmartSales365"
+                organization_name="TUMOMITO S.A."
             )
 
             response = HttpResponse(file_content, content_type=mime_type)
