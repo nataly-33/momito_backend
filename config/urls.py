@@ -25,6 +25,7 @@ urlpatterns = [
     path('api/orders/', include('apps.orders.urls')),
     path('api/', include('apps.reports.urls')),
     path('api/', include('apps.ai.urls')),
+    path('api/', include('apps.quotes.urls')),
 ]
 
 # Servir archivos media en desarrollo
@@ -33,6 +34,6 @@ if settings.DEBUG:
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
 
 # Personalización del Admin
-admin.site.site_header = "SmartSales Admin"
-admin.site.site_title = "SmartSales Admin"
+admin.site.site_header = "TUMOMITO S.A. — Admin"
+admin.site.site_title = "TUMOMITO ERP"
 admin.site.index_title = "Panel de Administración"

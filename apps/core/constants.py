@@ -19,13 +19,16 @@ PERMISSIONS = {
 ROLES = ['Admin', 'Empleado', 'Cliente', 'Delivery']
 
 ESTADOS_PEDIDO = [
-    ('pendiente', 'Pendiente de pago'),
-    ('pago_recibido', 'Pago recibido'),
+    ('pendiente', 'Pendiente'),
     ('confirmado', 'Confirmado'),
-    ('preparando', 'Preparando'),
-    ('enviado', 'Enviado'),
+    ('en_preparacion', 'En preparación'),
+    ('despachado', 'Despachado'),
     ('entregado', 'Entregado'),
     ('cancelado', 'Cancelado'),
+    # Legacy B2C states (kept for backwards compatibility)
+    ('pago_recibido', 'Pago recibido'),
+    ('preparando', 'Preparando'),
+    ('enviado', 'Enviado'),
     ('reembolsado', 'Reembolsado'),
 ]
 

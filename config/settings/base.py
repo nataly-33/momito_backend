@@ -37,6 +37,7 @@ LOCAL_APPS = [
     'apps.orders',
     'apps.reports',
     'apps.ai',
+    'apps.quotes',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -137,8 +138,8 @@ CORS_ALLOW_CREDENTIALS = True
 
 # Spectacular (Swagger)
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'SmartSales365 API',
-    'DESCRIPTION': 'Sistema Inteligente de Gestión Comercial',
+    'TITLE': 'TUMOMITO S.A. — ERP B2B API',
+    'DESCRIPTION': 'Sistema ERP B2B para importadora mayorista TUMOMITO S.A.',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
