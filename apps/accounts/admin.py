@@ -19,7 +19,7 @@ class UserAdmin(BaseUserAdmin):
             'fields': ('rol', 'activo', 'email_verificado', 'is_staff', 'is_superuser')
         }),
         ('Información Adicional', {
-            'fields': ('codigo_empleado', 'saldo_billetera')
+            'fields': ('codigo_empleado',)
         }),
         ('Fechas', {
             'fields': ('created_at', 'updated_at', 'deleted_at'),
