@@ -158,36 +158,50 @@ class Command(BaseCommand):
             self._clear_data()
 
         self.stdout.write('=== TUMOMITO SEEDER ===')
+
+        # Paso 0: roles, permisos y usuarios demo (idempotente)
+        from django.core.management import call_command
+        call_command('setup_demo', verbosity=0)
+        self.stdout.write('  OK Roles, permisos y usuarios demo configurados')
+
         self._create_categories()
         self._create_brands()
         self._create_products()
         self._create_clients_and_users()
         self._create_orders()
-        self.stdout.write(self.style.SUCCESS('✅ Seeder completado exitosamente.'))
+        self._create_quotes()
+        self._create_inventory_movements()
+        self._set_low_stock_products()
+        self.stdout.write(self.style.SUCCESS('Seeder completado exitosamente.'))
 
     def _clear_data(self):
         from apps.orders.models import DetallePedido, Pedido
         from apps.products.models import Prenda, Categoria, Marca, InventoryMovement
         from apps.customers.models import Client
-        self.stdout.write('🗑  Limpiando datos anteriores...')
-        DetallePedido.objects.filter(deleted_at__isnull=True).delete()
-        Pedido.objects.filter(deleted_at__isnull=True).delete()
+        from apps.quotes.models import QuoteItem, Quote
+        self.stdout.write('Limpiando datos anteriores...')
+        QuoteItem.objects.all().delete()
+        Quote.objects.all().delete()
+        DetallePedido.objects.all().delete()
+        Pedido.objects.all().delete()
         InventoryMovement.objects.all().delete()
-        Prenda.objects.filter(deleted_at__isnull=True).delete()
-        Client.objects.filter(deleted_at__isnull=True).delete()
+        Prenda.objects.all().delete()
+        # Eliminar TODOS los Client profiles (incluyendo los del setup_demo)
+        # para que los NIT queden libres y no generen UniqueViolation
+        Client.objects.all().delete()
 
     def _create_categories(self):
         from apps.products.models import Categoria
         for nombre in CATEGORIES:
             Categoria.objects.get_or_create(nombre=nombre, defaults={'activa': True})
-        self.stdout.write(f'  ✓ {len(CATEGORIES)} categorías creadas')
+        self.stdout.write(f'  OK{len(CATEGORIES)} categorías creadas')
 
     def _create_brands(self):
         from apps.products.models import Marca
         brand_names = set(BRANDS.values())
         for nombre in brand_names:
             Marca.objects.get_or_create(nombre=nombre, defaults={'activa': True})
-        self.stdout.write(f'  ✓ {len(brand_names)} marcas creadas')
+        self.stdout.write(f'  OK{len(brand_names)} marcas creadas')
 
     def _create_products(self):
         from apps.products.models import Prenda, Categoria, Marca
@@ -217,20 +231,24 @@ class Command(BaseCommand):
                 if created:
                     p.categorias.set([cat])
                     count += 1
-        self.stdout.write(f'  ✓ {count} productos creados')
+        self.stdout.write(f'  OK{count} productos creados')
 
     def _create_clients_and_users(self):
         from apps.customers.models import Client
         from apps.accounts.models import Role
+        from django.db import IntegrityError
+
         count = 0
         client_role, _ = Role.objects.get_or_create(
             nombre='Cliente',
             defaults={'descripcion': 'Cliente empresa B2B'}
         )
+
         for (company, nit, city, limit) in CLIENTS:
             username = nit.replace('-', '')
             email = f"empresa{username}@tumomito.com"
-            user, _ = User.objects.get_or_create(
+
+            user, user_created = User.objects.get_or_create(
                 email=email,
                 defaults={
                     'nombre': company.split()[0],
@@ -239,23 +257,40 @@ class Command(BaseCommand):
                     'rol': client_role,
                 }
             )
-            if _:
+            if user_created:
                 user.set_password('tumomito2024')
                 user.save()
 
             c_type = 'vip' if limit >= 40000 else ('regular' if limit >= 15000 else 'nuevo')
-            Client.objects.get_or_create(
-                user=user,
-                defaults={
-                    'company_name': company,
-                    'nit': nit,
-                    'city': city,
-                    'credit_limit': Decimal(str(limit)),
-                    'client_type': c_type,
-                }
-            )
+
+            # Buscar por NIT primero para evitar UniqueViolation
+            existing_by_nit = Client.objects.filter(nit=nit).first()
+            if existing_by_nit:
+                # Ya existe un Client con ese NIT (p.ej. del setup_demo) — reasignar al user del seeder
+                if existing_by_nit.user_id != user.id:
+                    existing_by_nit.user = user
+                    existing_by_nit.company_name = company
+                    existing_by_nit.city = city
+                    existing_by_nit.credit_limit = Decimal(str(limit))
+                    existing_by_nit.client_type = c_type
+                    existing_by_nit.save()
+            else:
+                # Verificar que el user no tenga ya un Client
+                if not Client.objects.filter(user=user).exists():
+                    try:
+                        Client.objects.create(
+                            user=user,
+                            company_name=company,
+                            nit=nit,
+                            city=city,
+                            credit_limit=Decimal(str(limit)),
+                            client_type=c_type,
+                        )
+                    except IntegrityError:
+                        pass  # race condition muy improbable, ignorar
+
             count += 1
-        self.stdout.write(f'  ✓ {count} clientes empresa creados')
+        self.stdout.write(f'  OK{count} clientes empresa creados')
 
     def _create_orders(self):
         from apps.orders.models import Pedido, DetallePedido
@@ -276,16 +311,22 @@ class Command(BaseCommand):
 
         orders_created = 0
         target_per_year = 3000
-        years = [2021, 2022, 2023, 2024]
+        # 2026 solo hasta el 7 de mayo (fecha actual del sistema)
+        years = [2021, 2022, 2023, 2024, 2025, 2026]
 
         # Get or create admin user for seller
         admin_user = User.objects.filter(is_staff=True).first() or User.objects.first()
+
+        from calendar import monthrange as mr
 
         for year in years:
             self.stdout.write(f'  Generando pedidos año {year}...')
             orders_this_year = 0
 
-            for month in range(1, 13):
+            # Para 2026, solo enero–mayo; mayo solo hasta el día 7
+            max_month = 5 if year == 2026 else 12
+
+            for month in range(1, max_month + 1):
                 monthly_target = target_per_year // 12
 
                 # Apply seasonality boost
@@ -293,18 +334,18 @@ class Command(BaseCommand):
                     SEASONALITY[cat][month - 1] for cat in CATEGORIES
                 )
                 monthly_count = int(monthly_target * max_seasonality)
+                # Para 2026 reducir proporcionalmente (datos parciales del año)
+                if year == 2026:
+                    monthly_count = max(1, monthly_count // 3)
 
                 for _ in range(monthly_count):
                     client = random.choice(clients)
 
-                    # Random date in this month
-                    if month == 12:
-                        days_in_month = 31
-                    else:
-                        from calendar import monthrange as mr
-                        _, days_in_month = mr(year, month)
+                    _, days_in_month = mr(year, month)
+                    # Mayo 2026 solo hasta el día 7
+                    max_day = 7 if (year == 2026 and month == 5) else days_in_month
 
-                    day = random.randint(1, days_in_month)
+                    day = random.randint(1, max_day)
                     order_date = datetime(year, month, day,
                                          random.randint(8, 18),
                                          random.randint(0, 59),
@@ -335,8 +376,8 @@ class Command(BaseCommand):
                         subtotal += sub
                         items_data.append((product, qty, price, sub))
 
-                    estados = ['pendiente', 'confirmado', 'en_preparacion', 'despachado', 'entregado', 'cancelado']
-                    weights_estado = [5, 15, 10, 10, 55, 5]
+                    estados = ['pendiente', 'confirmado', 'despachado', 'entregado', 'cancelado']
+                    weights_estado = [5, 15, 10, 60, 10]
                     estado = random.choices(estados, weights=weights_estado, k=1)[0]
 
                     pedido = Pedido(
@@ -365,6 +406,89 @@ class Command(BaseCommand):
                     orders_created += 1
                     orders_this_year += 1
 
-            self.stdout.write(f'    → {orders_this_year} pedidos en {year}')
+        self.stdout.write(f'  OK{orders_created} pedidos históricos creados (2021-2026)')
 
-        self.stdout.write(f'  ✓ {orders_created} pedidos históricos creados (2021-2024)')
+    def _create_quotes(self):
+        """Crea cotizaciones de ejemplo para el dashboard."""
+        from apps.quotes.models import Quote, QuoteItem
+        from apps.customers.models import Client
+        from apps.products.models import Prenda
+        from apps.accounts.models import User
+
+        clients = list(Client.objects.filter(deleted_at__isnull=True)[:10])
+        products = list(Prenda.objects.filter(activa=True, deleted_at__isnull=True)[:20])
+        seller = User.objects.filter(rol__nombre='Empleado').first() or \
+                 User.objects.filter(is_staff=True).first()
+
+        if not clients or not products:
+            self.stdout.write('  WARN Sin clientes/productos para cotizaciones')
+            return
+
+        statuses = ['borrador', 'enviada', 'aceptada', 'rechazada', 'aceptada', 'aceptada']
+        count = 0
+        for i, client in enumerate(clients[:8]):
+            status = statuses[i % len(statuses)]
+            quote = Quote.objects.create(
+                client=client,
+                seller=seller,
+                status=status,
+                notes=f'Cotización de prueba #{i+1}',
+            )
+            # 2-4 ítems por cotización
+            selected = random.sample(products, min(random.randint(2, 4), len(products)))
+            for product in selected:
+                qty = random.randint(product.min_order_qty, product.min_order_qty * 10)
+                price = product.price_wholesale
+                QuoteItem.objects.create(
+                    quote=quote, product=product,
+                    quantity=qty, unit_price=price,
+                    subtotal=qty * price,
+                )
+            quote.recalculate_total()
+            count += 1
+        self.stdout.write(f'  OK{count} cotizaciones creadas')
+
+    def _create_inventory_movements(self):
+        """Crea movimientos de inventario de ejemplo."""
+        from apps.products.models import Prenda, InventoryMovement
+        from apps.accounts.models import User
+
+        admin = User.objects.filter(is_staff=True).first()
+        products = list(Prenda.objects.filter(activa=True, deleted_at__isnull=True)[:20])
+        if not products or not admin:
+            return
+
+        movement_types = [
+            ('entrada', 'Importación inicial'),
+            ('entrada', 'Reposición de stock'),
+            ('salida', 'Venta directa'),
+            ('entrada', 'Devolución proveedor'),
+            ('ajuste', 'Ajuste de inventario'),
+        ]
+        count = 0
+        for product in products[:15]:
+            mt, note = random.choice(movement_types)
+            qty = random.randint(10, 200)
+            # Crear sin llamar save() para evitar modificar el stock actual
+            InventoryMovement.objects.create(
+                product=product,
+                user=admin,
+                movement_type=mt,
+                quantity=qty,
+                notes=note,
+            )
+            count += 1
+        self.stdout.write(f'  OK{count} movimientos de inventario creados')
+
+    def _set_low_stock_products(self):
+        """Pone algunos productos con stock bajo para que se vean en las alertas."""
+        from apps.products.models import Prenda
+        products = list(Prenda.objects.filter(activa=True, deleted_at__isnull=True))
+        low_count = max(8, len(products) // 6)  # ~16% con stock bajo
+        selected = random.sample(products, min(low_count, len(products)))
+        for product in selected:
+            # Stock en 0 o muy por debajo del mínimo
+            product.stock = random.choice([0, 0, 1, 2, 3, random.randint(1, product.stock_min - 1) if product.stock_min > 1 else 0])
+            product.stock_min = random.randint(15, 30)
+            product.save(update_fields=['stock', 'stock_min'])
+        self.stdout.write(f'  OK{low_count} productos configurados con stock bajo')

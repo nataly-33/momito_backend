@@ -7,7 +7,7 @@ class Categoria(BaseModel):
     """Categorías de productos (Vestidos, Blusas, Pantalones, etc.)"""
     nombre = models.CharField(max_length=100, unique=True, verbose_name='Nombre')
     descripcion = models.TextField(blank=True, verbose_name='Descripción')
-    imagen = models.URLField(null=True, blank=True, verbose_name='URL Imagen S3')
+    imagen = models.ImageField(upload_to='images/categorias/', null=True, blank=True, verbose_name='Imagen')
     activa = models.BooleanField(default=True, verbose_name='Activa')
     
     class Meta:
@@ -75,6 +75,9 @@ class Prenda(BaseModel):
     color = models.CharField(max_length=50, blank=True, verbose_name='Color')
     material = models.CharField(max_length=200, blank=True, verbose_name='Material')
 
+    # Imagen principal del producto (subida por el admin)
+    imagen = models.ImageField(upload_to='images/productos/', null=True, blank=True, verbose_name='Imagen principal')
+
     # Estado y destacados
     activa = models.BooleanField(default=True, verbose_name='Activa')
     destacada = models.BooleanField(default=False, verbose_name='Destacada')
@@ -112,7 +115,9 @@ class Prenda(BaseModel):
     
     @property
     def imagen_principal(self):
-        """Retorna la primera imagen URL o None"""
+        """Retorna la URL de imagen: primero el campo imagen, luego ImagenPrendaURL"""
+        if self.imagen:
+            return self.imagen.url
         primera = self.imagenes_url.filter(es_principal=True).first()
         if primera:
             return primera.imagen_url

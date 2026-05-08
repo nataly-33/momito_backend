@@ -4,14 +4,20 @@ from .models import Categoria, Marca, Talla, Prenda, StockPrenda, ImagenPrendaUR
 
 class CategoriaSerializer(serializers.ModelSerializer):
     total_prendas = serializers.SerializerMethodField()
-    
+    imagen_url = serializers.SerializerMethodField()
+
     class Meta:
         model = Categoria
-        fields = ['id', 'nombre', 'descripcion', 'imagen', 'activa', 'total_prendas', 'created_at']
-        read_only_fields = ['id', 'created_at']
-    
+        fields = ['id', 'nombre', 'descripcion', 'imagen', 'imagen_url', 'activa', 'total_prendas', 'created_at']
+        read_only_fields = ['id', 'created_at', 'imagen_url']
+
     def get_total_prendas(self, obj):
         return obj.prendas.filter(activa=True, deleted_at__isnull=True).count()
+
+    def get_imagen_url(self, obj):
+        if obj.imagen:
+            return obj.imagen.url
+        return None
 
 
 class MarcaSerializer(serializers.ModelSerializer):
@@ -127,6 +133,7 @@ class InventoryMovementSerializer(serializers.ModelSerializer):
 class PrendaCreateUpdateSerializer(serializers.ModelSerializer):
     """Serializer para crear/actualizar productos B2B"""
     stocks = serializers.ListField(child=serializers.DictField(), required=False, write_only=True)
+    imagen = serializers.ImageField(required=False, allow_null=True)
 
     class Meta:
         model = Prenda
@@ -134,7 +141,7 @@ class PrendaCreateUpdateSerializer(serializers.ModelSerializer):
             'nombre', 'descripcion', 'precio', 'price_wholesale', 'price_retail',
             'unit', 'min_order_qty', 'stock', 'stock_min',
             'marca', 'categorias', 'tallas_disponibles', 'color', 'material',
-            'activa', 'destacada', 'es_novedad', 'metadata', 'stocks', 'code'
+            'activa', 'destacada', 'es_novedad', 'metadata', 'stocks', 'code', 'imagen'
         ]
 
     def to_internal_value(self, data):
