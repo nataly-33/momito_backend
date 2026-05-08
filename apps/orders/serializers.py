@@ -48,15 +48,38 @@ class HistorialEstadoPedidoSerializer(serializers.ModelSerializer):
 
 
 class PedidoListSerializer(serializers.ModelSerializer):
-    """Serializer ligero para listados"""
+    """Serializer ligero para listados — muestra empresa B2B o nombre de usuario."""
     total_items = serializers.ReadOnlyField()
-    
+    cliente_nombre = serializers.SerializerMethodField()
+    estado_display = serializers.SerializerMethodField()
+
     class Meta:
         model = Pedido
         fields = [
-            'id', 'numero_pedido', 'estado', 'total', 'total_items',
-            'created_at', 'updated_at'
+            'id', 'numero_pedido', 'estado', 'estado_display',
+            'total', 'total_items', 'cliente_nombre',
+            'payment_method', 'created_at', 'updated_at'
         ]
+
+    def get_cliente_nombre(self, obj):
+        """Empresa B2B si existe, nombre completo del usuario si no."""
+        try:
+            if obj.client and obj.client.company_name:
+                return obj.client.company_name
+        except Exception:
+            pass
+        if obj.usuario:
+            return f"{obj.usuario.nombre} {obj.usuario.apellido}".strip()
+        return "—"
+
+    def get_estado_display(self, obj):
+        return dict([
+            ('pendiente', 'Pendiente'), ('confirmado', 'Confirmado'),
+            ('en_preparacion', 'En preparación'), ('despachado', 'Despachado'),
+            ('entregado', 'Entregado'), ('cancelado', 'Cancelado'),
+            ('pago_recibido', 'Pago recibido'), ('preparando', 'Preparando'),
+            ('enviado', 'Enviado'), ('reembolsado', 'Reembolsado'),
+        ]).get(obj.estado, obj.estado)
 
 
 class PedidoDetailSerializer(serializers.ModelSerializer):
@@ -81,43 +104,71 @@ class PedidoDetailSerializer(serializers.ModelSerializer):
         ]
 
 
+METODOS_PAGO_CHECKOUT = [
+    'efectivo', 'tarjeta', 'paypal', 'billetera',
+    'transferencia', 'credito',  # métodos B2B mayorista
+]
+
+
 class CheckoutSerializer(serializers.Serializer):
-    """Serializer para el proceso de checkout"""
-    direccion_envio_id = serializers.UUIDField()
-    metodo_pago = serializers.ChoiceField(choices=['efectivo', 'tarjeta', 'paypal', 'billetera'])
+    """
+    Serializer para checkout B2C y B2B.
+
+    - direccion_envio_id: requerido para B2C. En B2B (rol Cliente) es opcional;
+      si no se envía, se toma la dirección del perfil de empresa.
+    - metodo_pago: acepta métodos B2C (tarjeta, paypal, billetera, efectivo)
+      y B2B (transferencia, credito).
+    """
+    direccion_envio_id = serializers.UUIDField(required=False, allow_null=True)
+    metodo_pago = serializers.ChoiceField(choices=METODOS_PAGO_CHECKOUT)
     notas_cliente = serializers.CharField(required=False, allow_blank=True)
-    
-    # Campos opcionales para pagos con tarjeta
-    payment_method_id = serializers.CharField(required=False, allow_blank=True)  # Para Stripe
-    paypal_order_id = serializers.CharField(required=False, allow_blank=True)  # Para PayPal
-    
+
+    # Opcionales según método de pago
+    payment_method_id = serializers.CharField(required=False, allow_blank=True)
+    paypal_order_id = serializers.CharField(required=False, allow_blank=True)
+
     def validate_direccion_envio_id(self, value):
+        if value is None:
+            return None
         from apps.customers.models import Direccion
-        
         try:
-            direccion = Direccion.objects.get(
+            return Direccion.objects.get(
                 id=value,
                 usuario=self.context['request'].user,
                 deleted_at__isnull=True
             )
-            return direccion
         except Direccion.DoesNotExist:
             raise serializers.ValidationError("Dirección no encontrada")
-    
+
     def validate(self, data):
+        user = self.context['request'].user
         metodo_pago = data.get('metodo_pago')
-        
-        # Validar campos requeridos según el método de pago
+
+        # Verificar dirección: obligatoria para B2C, opcional para B2B
+        direccion = data.get('direccion_envio_id')
+        if direccion is None:
+            is_b2b = (
+                hasattr(user, 'rol') and user.rol and
+                user.rol.nombre == 'Cliente' and
+                hasattr(user, 'client_profile') and user.client_profile
+            )
+            if not is_b2b:
+                raise serializers.ValidationError({
+                    'direccion_envio_id': 'Este campo es requerido para usuarios sin perfil de empresa.'
+                })
+
+        # Stripe requiere payment_method_id
         if metodo_pago == 'tarjeta' and not data.get('payment_method_id'):
             raise serializers.ValidationError({
-                'payment_method_id': 'Este campo es requerido para pagos con tarjeta'
+                'payment_method_id': 'Requerido para pago con tarjeta.'
             })
-        
+
+        # PayPal requiere paypal_order_id
         if metodo_pago == 'paypal' and not data.get('paypal_order_id'):
             raise serializers.ValidationError({
-                'paypal_order_id': 'Este campo es requerido para pagos con PayPal'
+                'paypal_order_id': 'Requerido para pago con PayPal.'
             })
-        
+
         return data
 
 

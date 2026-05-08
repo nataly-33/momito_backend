@@ -36,16 +36,42 @@ class PedidoViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
-        
-        # Admins y empleados ven todos los pedidos
+        params = self.request.query_params
+
         if hasattr(user, 'rol') and user.rol and user.rol.nombre in ['Admin', 'Empleado']:
-            return Pedido.objects.filter(deleted_at__isnull=True).order_by('-created_at')
-        
-        # Clientes solo ven sus pedidos
-        return Pedido.objects.filter(
-            usuario=user,
-            deleted_at__isnull=True
-        ).order_by('-created_at')
+            qs = Pedido.objects.filter(deleted_at__isnull=True).select_related(
+                'usuario', 'client'
+            )
+        else:
+            qs = Pedido.objects.filter(
+                usuario=user, deleted_at__isnull=True
+            ).select_related('usuario', 'client')
+
+        # Filtro por estado
+        estado = params.get('estado')
+        if estado:
+            qs = qs.filter(estado=estado)
+
+        # Filtro por fechas
+        fecha_inicio = params.get('fecha_inicio')
+        fecha_fin = params.get('fecha_fin')
+        if fecha_inicio:
+            qs = qs.filter(created_at__date__gte=fecha_inicio)
+        if fecha_fin:
+            qs = qs.filter(created_at__date__lte=fecha_fin)
+
+        # Búsqueda por número de pedido o empresa
+        search = params.get('search')
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(numero_pedido__icontains=search) |
+                Q(client__company_name__icontains=search) |
+                Q(usuario__nombre__icontains=search) |
+                Q(usuario__apellido__icontains=search)
+            )
+
+        return qs.order_by('-created_at')
     
     def get_serializer_class(self):
         if self.action == 'retrieve':
@@ -59,7 +85,7 @@ class PedidoViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         
         usuario = request.user
-        direccion_envio = serializer.validated_data['direccion_envio_id']
+        direccion_envio = serializer.validated_data.get('direccion_envio_id')  # puede ser None en B2B
         metodo_pago_codigo = serializer.validated_data['metodo_pago']
         notas_cliente = serializer.validated_data.get('notas_cliente', '')
         
@@ -85,20 +111,22 @@ class PedidoViewSet(viewsets.ModelViewSet):
         items_invalidos = []
         
         for item in items:
-            # Verificar stock
-            stock = StockPrenda.objects.filter(
-                prenda=item.prenda,
-                talla=item.talla
-            ).first()
-            
-            if not stock or stock.cantidad < item.cantidad:
+            # Verificar stock: B2B usa prenda.stock directo; B2C usa StockPrenda por talla
+            if item.talla:
+                stock_obj = StockPrenda.objects.filter(
+                    prenda=item.prenda, talla=item.talla
+                ).first()
+                disponible = stock_obj.cantidad if stock_obj else 0
+            else:
+                disponible = item.prenda.stock
+
+            if disponible < item.cantidad:
                 items_invalidos.append({
                     'prenda': item.prenda.nombre,
-                    'talla': item.talla.nombre,
                     'solicitado': item.cantidad,
-                    'disponible': stock.cantidad if stock else 0
+                    'disponible': disponible,
                 })
-            
+
             subtotal += item.subtotal
         
         if items_invalidos:
@@ -121,36 +149,45 @@ class PedidoViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # Obtener perfil B2B del usuario si existe
+        client_profile = getattr(usuario, 'client_profile', None)
+
         # Crear pedido en una transacción
         with transaction.atomic():
-            # Crear pedido
             pedido = Pedido.objects.create(
                 usuario=usuario,
+                client=client_profile,
                 direccion_envio=direccion_envio,
                 subtotal=subtotal,
                 descuento=descuento,
                 costo_envio=costo_envio,
                 total=total,
                 estado='pendiente',
-                notas_cliente=notas_cliente
+                payment_method=metodo_pago_codigo if metodo_pago_codigo in ['transferencia', 'credito', 'efectivo', 'stripe'] else 'transferencia',
+                notas_cliente=notas_cliente,
             )
-            
-            # Crear detalles del pedido y reducir stock
+
+            # Crear detalles y reducir stock
             for item in items:
                 DetallePedido.objects.create(
                     pedido=pedido,
                     prenda=item.prenda,
-                    talla=item.talla,
+                    talla=item.talla if item.talla else None,
                     cantidad=item.cantidad,
-                    precio_unitario=item.precio_unitario
+                    precio_unitario=item.precio_unitario,
                 )
-                
-                # Reducir stock
-                stock = StockPrenda.objects.get(
-                    prenda=item.prenda,
-                    talla=item.talla
-                )
-                stock.reducir_stock(item.cantidad)
+
+                # Reducir stock según tipo de producto
+                if item.talla:
+                    stock_obj = StockPrenda.objects.filter(
+                        prenda=item.prenda, talla=item.talla
+                    ).first()
+                    if stock_obj:
+                        stock_obj.reducir_stock(item.cantidad)
+                else:
+                    # Stock directo en prenda (B2B)
+                    item.prenda.stock = max(0, item.prenda.stock - item.cantidad)
+                    item.prenda.save(update_fields=['stock'])
             
             # Procesar pago según el método
             pago = Pago.objects.create(

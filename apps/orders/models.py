@@ -109,9 +109,10 @@ class Pedido(BaseModel):
             import string
             from django.utils import timezone
             
-            timestamp = timezone.now().strftime('%Y%m%d%H%M%S')
-            random_str = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
-            self.numero_pedido = f"ORD-{timestamp}-{random_str}"
+            # Usa el UUID propio (único por definición) para evitar colisiones en bulk inserts
+            fecha = timezone.now().strftime('%Y%m%d')
+            unique_part = str(self.id).replace('-', '')[:8].upper()
+            self.numero_pedido = f"ORD-{fecha}-{unique_part}"
         
         if self.direccion_envio and not self.direccion_snapshot:
             self.direccion_snapshot = {
