@@ -111,73 +111,88 @@ class PredictionService:
         
         return predictions
     
-    def predict_by_category(self, n_months=3):
+    def predict_by_category(self, n_months=6, use_cache=True):
         """
-        Predice ventas de los próximos N meses para cada categoría
-        
-        Args:
-            n_months (int): Número de meses a predecir
-        
-        Returns:
-            list: Predicciones por categoría y mes
+        Predice ventas de los próximos N meses para cada categoría.
+        Si use_cache=True y ya existen predicciones en BD para el modelo activo,
+        las devuelve directamente sin re-ejecutar el modelo (mucho más rápido).
         """
-        categorias = ['Vestidos', 'Blusas', 'Jeans', 'Jackets']
+        from apps.ai.services.data_preparation import CATEGORIAS_TUMOMITO
+        categorias = CATEGORIAS_TUMOMITO
         ml_model, model, feature_columns = self.training_service.load_active_model()
-        predictions = []
-        
+
+        # Calcular períodos esperados
+        expected_periods = []
         for i in range(n_months):
-            # Calcular fecha del mes a predecir
             target_date = timezone.now() + timedelta(days=30 * (i + 1))
-            periodo = target_date.strftime('%Y-%m')
-            
+            expected_periods.append(target_date.strftime('%Y-%m'))
+
+        # ── Caché: devolver predicciones guardadas si están completas ──────────
+        if use_cache:
+            cached = list(
+                PrediccionVentas.objects.filter(
+                    modelo=ml_model,
+                    periodo_predicho__in=expected_periods,
+                    categoria__in=categorias,
+                ).order_by('periodo_predicho', 'categoria')
+            )
+            if len(cached) >= n_months * len(categorias):
+                confianza = self._calculate_confidence(ml_model)
+                return [
+                    {
+                        'periodo': p.periodo_predicho,
+                        'ventas_predichas': round(float(p.ventas_predichas), 2),
+                        'categoria': p.categoria,
+                        'prediccion_id': str(p.id),
+                        'confianza': confianza,
+                    }
+                    for p in cached
+                ]
+
+        # ── Generar predicciones nuevas ────────────────────────────────────────
+        predictions = []
+        for i, periodo in enumerate(expected_periods):
+            target_date = timezone.now() + timedelta(days=30 * (i + 1))
             for categoria in categorias:
                 try:
-                    # Preparar features
                     features = self._prepare_features_for_date(target_date, categoria, feature_columns)
-                    
-                    # Hacer predicción
-                    prediction = model.predict(features)[0]
-                    
-                    # Verificar si ya existe predicción para este período y categoría
-                    # Si existe, actualizar; si no, crear
-                    prediccion, created = PrediccionVentas.objects.update_or_create(
+                    prediction = max(0.0, float(model.predict(features)[0]))
+
+                    prediccion, _ = PrediccionVentas.objects.update_or_create(
                         modelo=ml_model,
                         periodo_predicho=periodo,
                         categoria=categoria,
                         defaults={
                             'ventas_predichas': prediction,
-                            'features_input': features.to_dict('records')[0]
-                        }
+                            'features_input': features.to_dict('records')[0],
+                        },
                     )
-                    
+
                     predictions.append({
                         'periodo': periodo,
                         'ventas_predichas': round(prediction, 2),
                         'categoria': categoria,
                         'prediccion_id': str(prediccion.id),
-                        'confianza': self._calculate_confidence(ml_model)
+                        'confianza': self._calculate_confidence(ml_model),
                     })
                 except Exception as e:
-                    print(f"⚠️ Error prediciendo {categoria} para {periodo}: {str(e)}")
-        
+                    print(f"⚠️ Error prediciendo {categoria} para {periodo}: {e}")
+
         return predictions
-    
-    def get_sales_forecast_dashboard(self, months_back=34, months_forward=3):
+
+    def get_sales_forecast_dashboard(self, months_back=24, months_forward=6, use_cache=True):
         """
-        Genera datos completos para el dashboard de predicción
-        
-        Args:
-            months_back (int): Meses históricos a mostrar (default: 34 para evitar Nov-Dic 2025)
-            months_forward (int): Meses futuros a predecir (default: 3 meses)
-            
-        Returns:
-            dict: Datos para el dashboard
+        Genera datos completos para el dashboard de predicción.
+        use_cache=True: devuelve predicciones guardadas en BD (rápido).
+        use_cache=False: re-ejecuta el modelo y sobreescribe (lento, solo en "Generar").
         """
         # 1. Datos históricos
         historical_data = self._get_historical_data_aggregated(months_back)
-        
-        # 2. Predicciones por categoría (para TODOS los meses solicitados)
-        category_predictions = self.predict_by_category(n_months=months_forward)
+
+        # 2. Predicciones por categoría
+        category_predictions = self.predict_by_category(
+            n_months=months_forward, use_cache=use_cache
+        )
         
         # 3. Calcular predicciones totales por mes sumando las categorías
         future_predictions = []
@@ -241,7 +256,8 @@ class PredictionService:
         }
         
         # One-hot encoding para categorías
-        categorias_disponibles = ['Vestidos', 'Blusas', 'Jeans', 'Jackets', 'Sin categoría']
+        from apps.ai.services.data_preparation import CATEGORIAS_TUMOMITO
+        categorias_disponibles = CATEGORIAS_TUMOMITO + ['Sin categoría']
         for cat in categorias_disponibles:
             col_name = f'cat_{cat}'
             if col_name in feature_columns:

@@ -53,12 +53,14 @@ class AIViewSet(viewsets.ViewSet):
         Retorna todos los datos necesarios para el dashboard de predicción
         """
         try:
-            months_back = int(request.query_params.get('months_back', 6))
-            months_forward = int(request.query_params.get('months_forward', 3))
-            
+            months_back = int(request.query_params.get('months_back', 24))
+            months_forward = int(request.query_params.get('months_forward', 6))
+            force_refresh = request.query_params.get('force_refresh', 'false').lower() == 'true'
+
             data = self.prediction_service.get_sales_forecast_dashboard(
                 months_back=months_back,
-                months_forward=months_forward
+                months_forward=months_forward,
+                use_cache=not force_refresh,
             )
             
             return Response(data, status=status.HTTP_200_OK)
