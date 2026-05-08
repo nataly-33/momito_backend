@@ -176,7 +176,7 @@ class PredictionService:
                         'confianza': self._calculate_confidence(ml_model),
                     })
                 except Exception as e:
-                    print(f"⚠️ Error prediciendo {categoria} para {periodo}: {e}")
+                    print(f"WARN Error prediciendo {categoria} para {periodo}: {e}")
 
         return predictions
 

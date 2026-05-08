@@ -5,9 +5,7 @@ from .models import Pedido, Pago
 
 @receiver(post_save, sender=Pedido)
 def pedido_creado(sender, instance, created, **kwargs):
-    """Signal cuando se crea un pedido"""
-    if created:
-        print(f"[Pedido] Creado: {instance.numero_pedido} - Total: {instance.total}")
+    pass  # log eliminado (demasiado verbose en seeder)
 
 
 @receiver(post_save, sender=Pago)

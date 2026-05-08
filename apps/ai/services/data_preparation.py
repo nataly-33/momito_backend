@@ -60,7 +60,7 @@ class DataPreparationService:
         df = pd.DataFrame(data)
 
         if len(df) < self.min_records_for_training:
-            print(f"⚠️ Solo {len(df)} registros reales. Generando datos sintéticos TUMOMITO...")
+            print(f"WARN Solo {len(df)} registros reales. Generando datos sinteticos TUMOMITO...")
             df = self._generate_synthetic_data(real_data=df if not df.empty else None)
 
         return df
@@ -120,7 +120,7 @@ class DataPreparationService:
         X = df_encoded[feature_columns]
         y = df_encoded['cantidad_vendida']
 
-        print(f"📊 Dataset: {len(X)} registros ({len(all_months)} meses × {len(CATEGORIAS_TUMOMITO)} categorías)")
+        print(f"Dataset: {len(X)} registros ({len(all_months)} meses x {len(CATEGORIAS_TUMOMITO)} categorias)")
         return X, y, feature_columns
 
     def _generate_synthetic_data(self, real_data=None, num_months=60, records_per_month=80):

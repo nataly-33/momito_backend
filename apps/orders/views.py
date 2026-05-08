@@ -385,10 +385,10 @@ class StripeWebhookView(View):
                 if pedido.estado == 'pendiente':
                     pedido.cambiar_estado('pago_recibido', notas='Pago completado via Stripe')
 
-            print(f"✅ Pago exitoso procesado: {pago.id}")
+            print(f"[OK] Pago exitoso procesado: {pago.id}")
 
         except Pago.DoesNotExist:
-            print(f"⚠️ Pago no encontrado para Payment Intent: {payment_intent_id}")
+            print(f"WARN Pago no encontrado para Payment Intent: {payment_intent_id}")
 
     def _handle_payment_failed(self, payment_intent):
         """Manejar pago fallido"""
@@ -403,10 +403,10 @@ class StripeWebhookView(View):
             pago.notas = payment_intent.get('last_payment_error', {}).get('message', 'Pago fallido')
             pago.save()
 
-            print(f"❌ Pago fallido: {pago.id}")
+            print(f"[FAIL] Pago fallido: {pago.id}")
 
         except Pago.DoesNotExist:
-            print(f"⚠️ Pago no encontrado para Payment Intent: {payment_intent_id}")
+            print(f"WARN Pago no encontrado para Payment Intent: {payment_intent_id}")
 
 
 class EnvioViewSet(viewsets.ModelViewSet):

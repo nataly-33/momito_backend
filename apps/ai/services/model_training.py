@@ -49,29 +49,29 @@ class ModelTrainingService:
             dict: Información del modelo entrenado y métricas
         """
         print("=" * 60)
-        print("🚀 INICIANDO ENTRENAMIENTO DEL MODELO DE PREDICCIÓN DE VENTAS")
+        print("INICIANDO ENTRENAMIENTO DEL MODELO DE PREDICCION DE VENTAS")
         print("=" * 60)
-        
+
         # 1. Obtener datos históricos
-        print(f"\n📊 Paso 1: Obteniendo datos históricos ({months_back} meses = {months_back/12:.1f} años)...")
+        print(f"\nPaso 1: Obteniendo datos historicos ({months_back} meses = {months_back/12:.1f} anos)...")
         df = self.data_service.get_historical_sales_data(months_back=months_back)
-        print(f"✅ {len(df)} registros obtenidos")
-        
+        print(f"OK {len(df)} registros obtenidos")
+
         # 2. Preparar features
-        print("\n🔧 Paso 2: Preparando features...")
+        print("\nPaso 2: Preparando features...")
         X, y, feature_columns = self.data_service.prepare_features(df, months_back=months_back)
-        print(f"✅ {len(feature_columns)} features creadas")
+        print(f"OK {len(feature_columns)} features creadas")
         print(f"   Samples: {len(X)}, Features: {X.shape[1]}")
-        
+
         # 3. Dividir en train/test
-        print(f"\n✂️ Paso 3: Dividiendo datos (train: {int((1-test_size)*100)}%, test: {int(test_size*100)}%)...")
+        print(f"\nPaso 3: Dividiendo datos (train: {int((1-test_size)*100)}%, test: {int(test_size*100)}%)...")
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state
         )
-        print(f"✅ Train: {len(X_train)} samples | Test: {len(X_test)} samples")
-        
+        print(f"OK Train: {len(X_train)} samples | Test: {len(X_test)} samples")
+
         # 4. Entrenar modelo
-        print(f"\n🤖 Paso 4: Entrenando Random Forest (n_estimators={n_estimators}, max_depth={max_depth})...")
+        print(f"\nPaso 4: Entrenando Random Forest (n_estimators={n_estimators}, max_depth={max_depth})...")
         model = RandomForestRegressor(
             n_estimators=n_estimators,
             max_depth=max_depth,
@@ -81,10 +81,10 @@ class ModelTrainingService:
         )
         
         model.fit(X_train, y_train)
-        print("✅ Modelo entrenado exitosamente")
-        
+        print("OK Modelo entrenado exitosamente")
+
         # 5. Evaluar modelo
-        print("\n📈 Paso 5: Evaluando rendimiento...")
+        print("\nPaso 5: Evaluando rendimiento...")
         y_pred_train = model.predict(X_train)
         y_pred_test = model.predict(X_test)
         
@@ -101,22 +101,22 @@ class ModelTrainingService:
         r2_test = r2_score(y_test, y_pred_test)
         
         print("\n" + "=" * 60)
-        print("📊 MÉTRICAS DE RENDIMIENTO")
+        print("METRICAS DE RENDIMIENTO")
         print("=" * 60)
-        print(f"\n🏋️ TRAIN SET:")
+        print("\nTRAIN SET:")
         print(f"   MAE:  {mae_train:.2f}")
         print(f"   MSE:  {mse_train:.2f}")
         print(f"   RMSE: {rmse_train:.2f}")
-        print(f"   R²:   {r2_train:.4f}")
-        
-        print(f"\n🎯 TEST SET:")
+        print(f"   R2:   {r2_train:.4f}")
+
+        print("\nTEST SET:")
         print(f"   MAE:  {mae_test:.2f}")
         print(f"   MSE:  {mse_test:.2f}")
         print(f"   RMSE: {rmse_test:.2f}")
-        print(f"   R²:   {r2_test:.4f}")
-        
+        print(f"   R2:   {r2_test:.4f}")
+
         # Importancia de features
-        print(f"\n⭐ TOP 10 FEATURES MÁS IMPORTANTES:")
+        print("\nTOP 10 FEATURES MAS IMPORTANTES:")
         feature_importance = pd.DataFrame({
             'feature': feature_columns,
             'importance': model.feature_importances_
@@ -141,10 +141,10 @@ class ModelTrainingService:
             'months_back': months_back
         }, model_path)
         
-        print(f"✅ Modelo guardado en: {model_path}")
-        
+        print(f"OK Modelo guardado en: {model_path}")
+
         # 7. Registrar en base de datos
-        print("\n💿 Paso 7: Registrando en base de datos...")
+        print("\nPaso 7: Registrando en base de datos...")
         ml_model = MLModel.objects.create(
             nombre='Predictor de Ventas',
             version=version,
@@ -169,10 +169,10 @@ class ModelTrainingService:
         # Desactivar modelos anteriores
         MLModel.objects.filter(activo=True).exclude(id=ml_model.id).update(activo=False)
         
-        print(f"✅ Modelo registrado con ID: {ml_model.id}")
-        
+        print(f"OK Modelo registrado con ID: {ml_model.id}")
+
         print("\n" + "=" * 60)
-        print("🎉 ENTRENAMIENTO COMPLETADO EXITOSAMENTE")
+        print("ENTRENAMIENTO COMPLETADO EXITOSAMENTE")
         print("=" * 60)
         
         return {
@@ -227,7 +227,7 @@ class ModelTrainingService:
         Returns:
             dict: Información del nuevo modelo
         """
-        print("\n🔄 RE-ENTRENANDO MODELO CON DATOS ACTUALIZADOS...")
+        print("\nRE-ENTRENANDO MODELO CON DATOS ACTUALIZADOS...")
         return self.train_model()
 
 
