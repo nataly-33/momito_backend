@@ -117,7 +117,10 @@ class Prenda(BaseModel):
     def imagen_principal(self):
         """Retorna la URL de imagen: primero el campo imagen, luego ImagenPrendaURL"""
         if self.imagen:
-            return self.imagen.url
+            try:
+                return self.imagen.url
+            except Exception:
+                pass
         primera = self.imagenes_url.filter(es_principal=True).first()
         if primera:
             return primera.imagen_url

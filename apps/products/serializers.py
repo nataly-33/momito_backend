@@ -5,6 +5,9 @@ from .models import Categoria, Marca, Talla, Prenda, StockPrenda, ImagenPrendaUR
 class CategoriaSerializer(serializers.ModelSerializer):
     total_prendas = serializers.SerializerMethodField()
     imagen_url = serializers.SerializerMethodField()
+    # write_only=True: acepta el archivo en POST/PATCH pero no lo incluye en GET
+    # (evita que DRF llame request.build_absolute_uri() con el host de Django)
+    imagen = serializers.ImageField(write_only=True, required=False, allow_null=True)
 
     class Meta:
         model = Categoria
@@ -16,7 +19,10 @@ class CategoriaSerializer(serializers.ModelSerializer):
 
     def get_imagen_url(self, obj):
         if obj.imagen:
-            return obj.imagen.url
+            try:
+                return obj.imagen.url  # retorna /images/categorias/file.jpg (relativo)
+            except Exception:
+                pass
         return None
 
 
@@ -93,6 +99,7 @@ class PrendaDetailSerializer(serializers.ModelSerializer):
     tiene_stock = serializers.ReadOnlyField()
     is_low_stock = serializers.ReadOnlyField()
     category_name = serializers.ReadOnlyField()
+    imagen_principal = serializers.ReadOnlyField()
 
     class Meta:
         model = Prenda
@@ -103,7 +110,7 @@ class PrendaDetailSerializer(serializers.ModelSerializer):
             'marca', 'marca_detalle', 'categorias', 'categorias_detalle',
             'category_name', 'tallas_disponibles', 'tallas_disponibles_detalle',
             'color', 'material', 'activa', 'destacada', 'es_novedad',
-            'imagenes_url', 'stocks', 'tiene_stock',
+            'imagenes_url', 'stocks', 'tiene_stock', 'imagen_principal',
             'slug', 'metadata', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'slug', 'stock_total', 'created_at', 'updated_at']
