@@ -28,9 +28,12 @@ urlpatterns = [
     path('api/', include('apps.quotes.urls')),
 ]
 
-# Servir archivos media en desarrollo
-if settings.DEBUG:
+# Servir archivos media en desarrollo.
+# Cuando MEDIA_URL='/' los archivos los sirve Vite desde public/, no Django.
+# Cuando MEDIA_URL='/media/' (producción u otro entorno) Django los sirve directamente.
+if settings.DEBUG and settings.MEDIA_URL not in ('/', ''):
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+if settings.DEBUG:
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
 
 # Personalización del Admin

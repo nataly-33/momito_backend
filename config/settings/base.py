@@ -12,6 +12,7 @@ ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost').split(',')
 
 # Apps
 DJANGO_APPS = [
+    'daphne',                              # debe ir antes de staticfiles
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -21,6 +22,7 @@ DJANGO_APPS = [
 ]
 
 THIRD_PARTY_APPS = [
+    'channels',
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
@@ -72,6 +74,14 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'config.wsgi.application'
+ASGI_APPLICATION = 'config.asgi.application'
+
+# WebSocket Channel Layer (InMemoryChannelLayer para desarrollo; en producción usar RedisChannelLayer)
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    }
+}
 
 # Database
 DATABASES = {
@@ -113,7 +123,7 @@ AUTH_USER_MODEL = 'accounts.User'
 # REST Framework
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'apps.core.authentication.SilentJWTAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
