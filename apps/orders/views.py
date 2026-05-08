@@ -85,7 +85,8 @@ class PedidoViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         
         usuario = request.user
-        direccion_envio = serializer.validated_data.get('direccion_envio_id')  # puede ser None en B2B
+        direccion_envio = serializer.validated_data.get('direccion_envio_id')
+        direccion_texto = serializer.validated_data.get('direccion_texto', '')
         metodo_pago_codigo = serializer.validated_data['metodo_pago']
         notas_cliente = serializer.validated_data.get('notas_cliente', '')
         
@@ -152,118 +153,107 @@ class PedidoViewSet(viewsets.ModelViewSet):
         # Obtener perfil B2B del usuario si existe
         client_profile = getattr(usuario, 'client_profile', None)
 
-        # Crear pedido en una transacción
-        with transaction.atomic():
-            pedido = Pedido.objects.create(
-                usuario=usuario,
-                client=client_profile,
-                direccion_envio=direccion_envio,
-                subtotal=subtotal,
-                descuento=descuento,
-                costo_envio=costo_envio,
-                total=total,
-                estado='pendiente',
-                payment_method=metodo_pago_codigo if metodo_pago_codigo in ['transferencia', 'credito', 'efectivo', 'stripe'] else 'transferencia',
-                notas_cliente=notas_cliente,
-            )
+        stripe_client_secret = None
 
-            # Crear detalles y reducir stock
-            for item in items:
-                DetallePedido.objects.create(
+        # Crear pedido en una transacción atómica
+        try:
+            with transaction.atomic():
+                pedido = Pedido.objects.create(
+                    usuario=usuario,
+                    client=client_profile,
+                    direccion_envio=direccion_envio,
+                    subtotal=subtotal,
+                    descuento=descuento,
+                    costo_envio=costo_envio,
+                    total=total,
+                    estado='pendiente',
+                    payment_method=metodo_pago_codigo if metodo_pago_codigo in ['efectivo', 'tarjeta'] else 'efectivo',
+                    notas_cliente=notas_cliente,
+                    metadata={'direccion_texto': direccion_texto} if direccion_texto else {},
+                )
+
+                # Crear detalles y reducir stock
+                for item in items:
+                    DetallePedido.objects.create(
+                        pedido=pedido,
+                        prenda=item.prenda,
+                        talla=item.talla if item.talla else None,
+                        cantidad=item.cantidad,
+                        precio_unitario=item.precio_unitario,
+                    )
+
+                    if item.talla:
+                        stock_obj = StockPrenda.objects.filter(
+                            prenda=item.prenda, talla=item.talla
+                        ).first()
+                        if stock_obj:
+                            stock_obj.reducir_stock(item.cantidad)
+                    else:
+                        item.prenda.stock = max(0, item.prenda.stock - item.cantidad)
+                        item.prenda.save(update_fields=['stock'])
+
+                    from apps.products.broadcast import broadcast_stock_update
+                    item.prenda.refresh_from_db(fields=['stock'])
+                    broadcast_stock_update(item.prenda)
+
+                pago = Pago.objects.create(
                     pedido=pedido,
-                    prenda=item.prenda,
-                    talla=item.talla if item.talla else None,
-                    cantidad=item.cantidad,
-                    precio_unitario=item.precio_unitario,
+                    metodo_pago=metodo_pago,
+                    monto=total,
+                    estado='pendiente',
                 )
 
-                # Reducir stock según tipo de producto
-                if item.talla:
-                    stock_obj = StockPrenda.objects.filter(
-                        prenda=item.prenda, talla=item.talla
-                    ).first()
-                    if stock_obj:
-                        stock_obj.reducir_stock(item.cantidad)
-                else:
-                    # Stock directo en prenda (B2B)
-                    item.prenda.stock = max(0, item.prenda.stock - item.cantidad)
-                    item.prenda.save(update_fields=['stock'])
-            
-            # Procesar pago según el método
-            pago = Pago.objects.create(
-                pedido=pedido,
-                metodo_pago=metodo_pago,
-                monto=total,
-                estado='pendiente'
+                if metodo_pago_codigo == 'efectivo':
+                    pago.save()
+
+                elif metodo_pago_codigo == 'tarjeta':
+                    from .services.stripe_service import StripeService
+
+                    stripe_result = StripeService.crear_y_confirmar(
+                        monto=total,
+                        payment_method_id=serializer.validated_data.get('payment_method_id'),
+                        moneda='usd',
+                        metadata={
+                            'pedido_id': str(pedido.id),
+                            'numero_pedido': pedido.numero_pedido,
+                        },
+                    )
+
+                    if not stripe_result['success']:
+                        raise Exception(stripe_result.get('error', 'Error al procesar la tarjeta'))
+
+                    pi = stripe_result['payment_intent']
+                    pago.stripe_payment_intent_id = pi.id
+                    pago.response_data = {'status': pi.status, 'pi_id': pi.id}
+
+                    if pi.status == 'succeeded':
+                        pago.estado = 'completado'
+                        pago.save()
+                        pedido.cambiar_estado('pago_recibido', usuario, 'Pago con tarjeta aprobado (Stripe)')
+                    else:
+                        # requires_action → 3D Secure pendiente en el frontend
+                        pago.estado = 'procesando'
+                        pago.save()
+                        stripe_client_secret = pi.client_secret
+
+                carrito.limpiar()
+
+        except Exception as exc:
+            return Response(
+                {'error': str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            
-            if metodo_pago_codigo == 'efectivo':
-                # Efectivo: pedido queda pendiente de pago
-                pass
-            
-            elif metodo_pago_codigo == 'billetera':
-                # Descontar de billetera
-                usuario.saldo_billetera -= total
-                usuario.save()
-                
-                pago.estado = 'completado'
-                pago.transaction_id = f'WALLET-{pedido.numero_pedido}'
-                pago.save()
-                
-                pedido.cambiar_estado('pago_recibido', usuario, 'Pago con billetera virtual')
-            
-            elif metodo_pago_codigo == 'tarjeta':
-                # Stripe
-                from .services.stripe_service import StripeService
-                
-                payment_method_id = serializer.validated_data.get('payment_method_id')
-                
-                stripe_result = StripeService.crear_payment_intent(
-                    monto=total,
-                    moneda='usd',
-                    metadata={
-                        'pedido_id': str(pedido.id),
-                        'numero_pedido': pedido.numero_pedido
-                    }
-                )
-                
-                if stripe_result['success']:
-                    pago.stripe_payment_intent_id = stripe_result['payment_intent']['id']
-                    pago.estado = 'procesando'
-                    pago.response_data = {'payment_intent': stripe_result['payment_intent']}
-                    pago.save()
-                else:
-                    raise Exception(f"Error procesando pago: {stripe_result.get('error')}")
-            
-            elif metodo_pago_codigo == 'paypal':
-                # PayPal
-                from .services.paypal_service import PayPalService
-                
-                paypal_order_id = serializer.validated_data.get('paypal_order_id')
-                
-                paypal_service = PayPalService()
-                capture_result = paypal_service.capturar_orden(paypal_order_id)
-                
-                if capture_result['success'] and capture_result['status'] == 'COMPLETED':
-                    pago.paypal_order_id = paypal_order_id
-                    pago.transaction_id = paypal_order_id
-                    pago.estado = 'completado'
-                    pago.response_data = capture_result
-                    pago.save()
-                    
-                    pedido.cambiar_estado('pago_recibido', usuario, 'Pago con PayPal')
-                else:
-                    raise Exception(f"Error procesando pago PayPal: {capture_result.get('error')}")
-            
-            # Limpiar carrito
-            carrito.limpiar()
-        
-        # Retornar pedido creado
+
+        # Respuesta exitosa
         pedido_serializer = PedidoDetailSerializer(pedido)
-        return Response({
+        response_data = {
             'message': 'Pedido creado exitosamente',
-            'pedido': pedido_serializer.data
-        }, status=status.HTTP_201_CREATED)
+            'pedido': pedido_serializer.data,
+        }
+        if stripe_client_secret:
+            response_data['stripe_client_secret'] = stripe_client_secret
+
+        return Response(response_data, status=status.HTTP_201_CREATED)
     
     @action(detail=True, methods=['post'])
     def cancelar(self, request, pk=None):

@@ -10,41 +10,56 @@ class StripeService:
     
     @staticmethod
     def crear_payment_intent(monto, moneda='usd', metadata=None):
-        """
-        Crear un Payment Intent en Stripe
-        
-        Args:
-            monto: Monto en la menor denominación (centavos para USD/EUR)
-            moneda: Código de moneda (usd, eur, bob, etc)
-            metadata: Diccionario con metadata adicional
-        
-        Returns:
-            Payment Intent object
-        """
+        """Crea un PaymentIntent sin confirmar (para obtener client_secret)."""
         try:
-            # Convertir monto a centavos (int)
             amount_cents = int(Decimal(str(monto)) * 100)
-            
             payment_intent = stripe.PaymentIntent.create(
                 amount=amount_cents,
                 currency=moneda,
                 metadata=metadata or {},
-                automatic_payment_methods={
-                    'enabled': True,
-                },
+                automatic_payment_methods={'enabled': True},
             )
-            
             return {
                 'success': True,
                 'payment_intent': payment_intent,
-                'client_secret': payment_intent.client_secret
+                'client_secret': payment_intent.client_secret,
             }
-        
         except stripe.error.StripeError as e:
+            return {'success': False, 'error': str(e)}
+
+    @staticmethod
+    def crear_y_confirmar(monto, payment_method_id, moneda='usd', metadata=None):
+        """
+        Crea un PaymentIntent y lo confirma inmediatamente con el payment_method dado.
+
+        Retorna:
+            status = 'succeeded'        → pago aprobado, client_secret no necesario
+            status = 'requires_action'  → pago necesita 3D Secure; devuelve client_secret
+            success = False             → tarjeta rechazada u otro error
+        """
+        try:
+            amount_cents = int(Decimal(str(monto)) * 100)
+
+            payment_intent = stripe.PaymentIntent.create(
+                amount=amount_cents,
+                currency=moneda,
+                payment_method=payment_method_id,
+                payment_method_types=['card'],
+                confirm=True,
+                metadata=metadata or {},
+            )
+
             return {
-                'success': False,
-                'error': str(e)
+                'success': True,
+                'payment_intent': payment_intent,
+                'status': payment_intent.status,
+                'client_secret': payment_intent.client_secret,
             }
+
+        except stripe.error.CardError as e:
+            return {'success': False, 'error': e.user_message or str(e)}
+        except stripe.error.StripeError as e:
+            return {'success': False, 'error': str(e)}
     
     @staticmethod
     def confirmar_payment_intent(payment_intent_id):
