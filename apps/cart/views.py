@@ -38,51 +38,48 @@ class CarritoViewSet(viewsets.GenericViewSet):
         
         carrito = self.get_or_create_carrito()
         prenda = serializer.validated_data['prenda_obj']
-        talla = serializer.validated_data['talla_obj']
+        talla = serializer.validated_data['talla_obj']  # puede ser None en B2B
         cantidad = serializer.validated_data['cantidad']
-        
+
+        # Precio: B2B usa price_wholesale, B2C usa precio
+        precio = prenda.price_wholesale if (not talla and prenda.price_wholesale) else prenda.precio
+
         with transaction.atomic():
-            # Buscar item existente (incluyendo los eliminados lógicamente)
+            # Buscar item existente (misma prenda + misma talla o ambos sin talla)
             item_existente = ItemCarrito.objects.filter(
                 carrito=carrito,
                 prenda=prenda,
-                talla=talla
+                talla=talla,
+                deleted_at__isnull=True,
             ).first()
-            
-            if item_existente and item_existente.deleted_at is None:
-                # Si ya existe y no está eliminado, aumentar la cantidad
+
+            if item_existente:
                 nueva_cantidad = item_existente.cantidad + cantidad
-                
-                # Verificar stock
-                from apps.products.models import StockPrenda
-                stock = StockPrenda.objects.filter(prenda=prenda, talla=talla).first()
-                
-                if not stock or stock.cantidad < nueva_cantidad:
-                    disponible = stock.cantidad if stock else 0
-                    return Response({
-                        'error': f'Stock insuficiente. Solo hay {disponible} unidades disponibles y ya tienes {item_existente.cantidad} en el carrito'
-                    }, status=status.HTTP_400_BAD_REQUEST)
-                
                 item_existente.cantidad = nueva_cantidad
                 item_existente.save()
                 item = item_existente
-                
-            elif item_existente and item_existente.deleted_at is not None:
-                # Si existe pero está eliminado, reactivarlo
-                item_existente.deleted_at = None
-                item_existente.cantidad = cantidad
-                item_existente.precio_unitario = prenda.precio
-                item_existente.save()
-                item = item_existente
             else:
-                # Crear nuevo item
-                item = ItemCarrito.objects.create(
+                # Verificar si hay uno eliminado para reactivar
+                item_eliminado = ItemCarrito.objects.filter(
                     carrito=carrito,
                     prenda=prenda,
                     talla=talla,
-                    cantidad=cantidad,
-                    precio_unitario=prenda.precio
-                )
+                ).exclude(deleted_at__isnull=True).first()
+
+                if item_eliminado:
+                    item_eliminado.deleted_at = None
+                    item_eliminado.cantidad = cantidad
+                    item_eliminado.precio_unitario = precio
+                    item_eliminado.save()
+                    item = item_eliminado
+                else:
+                    item = ItemCarrito.objects.create(
+                        carrito=carrito,
+                        prenda=prenda,
+                        talla=talla,
+                        cantidad=cantidad,
+                        precio_unitario=precio,
+                    )
         
         # Devolver el carrito actualizado
         carrito_serializer = CarritoSerializer(carrito)
@@ -123,21 +120,17 @@ class CarritoViewSet(viewsets.GenericViewSet):
         
         nueva_cantidad = serializer.validated_data['cantidad']
         
-        # Verificar stock
-        from apps.products.models import StockPrenda
-        stock = StockPrenda.objects.filter(
-            prenda=item.prenda,
-            talla=item.talla
-        ).first()
-        
-        if not stock:
+        # Verificar stock (B2C por talla / B2B directo en prenda)
+        if item.talla:
+            from apps.products.models import StockPrenda
+            stock = StockPrenda.objects.filter(prenda=item.prenda, talla=item.talla).first()
+            disponible = stock.cantidad if stock else 0
+        else:
+            disponible = item.prenda.stock
+
+        if nueva_cantidad > 0 and disponible < nueva_cantidad:
             return Response({
-                'error': 'Producto no disponible'
-            }, status=status.HTTP_400_BAD_REQUEST)
-            
-        if stock.cantidad < nueva_cantidad:
-            return Response({
-                'error': f'Stock insuficiente. Solo hay {stock.cantidad} unidades disponibles'
+                'error': f'Stock insuficiente. Solo hay {disponible} unidades disponibles'
             }, status=status.HTTP_400_BAD_REQUEST)
         
         if nueva_cantidad == 0:
